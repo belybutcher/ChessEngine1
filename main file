@@ -1,0 +1,206 @@
+import os
+import sys
+import pygame as pg
+
+# Change to script directory so paths work
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
+# Add chess folder to path and import
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'chess'))
+from ChessEngine import GameState, Move
+
+# Constants
+WIDTH = HEIGHT = 512
+DIMENSION = 8
+SQ_SIZE = HEIGHT // DIMENSION
+MAX_FPS = 15
+
+# Colors
+WHITE = (255, 255, 255)
+GRAY = (128, 128, 128)
+HIGHLIGHT = (255, 255, 0, 128)
+
+IMAGES = {}
+
+
+def load_images():
+    """Load piece images from chess/images/ folder."""
+    pieces = ["wp", "wR", "wN", "wB", "wQ", "wK",
+              "bp", "bR", "bN", "bB", "bQ", "bK"]
+
+    # DEBUG: Print where we're looking
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    images_dir = os.path.join(script_dir, "images")
+    print(f"Looking for images in: {images_dir}")
+    print(f"Folder exists: {os.path.exists(images_dir)}")
+    print(f"Contents: {os.listdir(images_dir) if os.path.exists(images_dir) else 'N/A'}")
+
+    for piece in pieces:
+        try:
+            path = os.path.join(images_dir, f"{piece}.png")
+            IMAGES[piece] = pg.transform.scale(
+                pg.image.load(path),
+                (SQ_SIZE, SQ_SIZE)
+            )
+        except FileNotFoundError:
+            print(f"Warning: Missing image {piece}.png at {path}")
+            IMAGES[piece] = None
+
+
+def draw_board(screen):
+    """Draw checkerboard pattern."""
+    for row in range(DIMENSION):
+        for col in range(DIMENSION):
+            color = WHITE if (row + col) % 2 == 0 else GRAY
+            pg.draw.rect(screen, color, (col * SQ_SIZE, row * SQ_SIZE, SQ_SIZE, SQ_SIZE))
+
+
+def draw_pieces(screen, board):
+    """Draw pieces using images or text fallback."""
+    font = pg.font.SysFont('Arial', 40, bold=True)
+    piece_symbols = {
+        'wp': 'P', 'wR': 'R', 'wN': 'N', 'wB': 'B', 'wQ': 'Q', 'wK': 'K',
+        'bp': 'p', 'bR': 'r', 'bN': 'n', 'bB': 'b', 'bQ': 'q', 'bK': 'k'
+    }
+
+    for row in range(DIMENSION):
+        for col in range(DIMENSION):
+            piece = board[row][col]
+            if piece == "--":
+                continue
+
+            x = col * SQ_SIZE
+            y = row * SQ_SIZE
+
+            # Try image first, fallback to text
+            if piece in IMAGES and IMAGES[piece]:
+                screen.blit(IMAGES[piece], (x, y))
+            else:
+                color = (0, 0, 0) if piece[0] == 'b' else (0, 0, 255)
+                text = font.render(piece_symbols.get(piece, '?'), True, color)
+                text_rect = text.get_rect(center=(x + SQ_SIZE // 2, y + SQ_SIZE // 2))
+                screen.blit(text, text_rect)
+
+
+def get_square_from_mouse(pos):
+    """Convert pixel coordinates to board square."""
+    x, y = pos
+    return (y // SQ_SIZE, x // SQ_SIZE)
+
+
+def main():
+    pg.init()
+    screen = pg.display.set_mode((WIDTH, HEIGHT))
+    pg.display.set_caption("Belal Chess Engine")
+    clock = pg.time.Clock()
+
+    load_images()
+
+    print("Creating game state...")
+    gs = GameState()
+    print(f"White to move: {gs.whiteToMove}")
+
+    selected_square = None
+    player_clicks = []
+    valid_moves = gs.getValidMoves()
+    move_made = False
+
+    print(f"Found {len(valid_moves)} valid moves")
+    print("Starting main loop...")
+
+    running = True
+    while running:
+        for event in pg.event.get():
+            if event.type == pg.QUIT:
+                running = False
+
+            elif event.type == pg.MOUSEBUTTONDOWN:
+                location = pg.mouse.get_pos()
+                row, col = get_square_from_mouse(location)
+
+                if selected_square is None:
+                    # First click - select piece
+                    piece = gs.board[row][col]
+                    if piece != "--":
+                        # Check if it's the correct color's turn
+                        is_white_piece = piece[0] == 'w'
+                        is_black_piece = piece[0] == 'b'
+
+                        if (gs.whiteToMove and is_white_piece) or \
+                                (not gs.whiteToMove and is_black_piece):
+                            selected_square = (row, col)
+                            player_clicks = [(row, col)]
+                            print(f"Selected {piece} at {row},{col}")
+                else:
+                    # Second click - try move
+                    player_clicks.append((row, col))
+                    move = Move(player_clicks[0], player_clicks[1], gs.board)
+                    print(f"Attempting move: {move}")
+
+                    # Check if move is in valid moves
+                    move_found = False
+                    for valid_move in valid_moves:
+                        if move.move_id == valid_move.move_id:
+                            move_found = True
+                            break
+
+                    if move_found:
+                        gs.makeMove(move)
+                        move_made = True
+                        selected_square = None
+                        player_clicks = []
+                        print(f"Move made! Now whiteToMove: {gs.whiteToMove}")
+                    else:
+                        print("Invalid move")
+                        # Check if clicked another own piece (reselect)
+                        piece = gs.board[row][col]
+                        if piece != "--":
+                            is_white_piece = piece[0] == 'w'
+                            is_black_piece = piece[0] == 'b'
+
+                            if (gs.whiteToMove and is_white_piece) or \
+                                    (not gs.whiteToMove and is_black_piece):
+                                selected_square = (row, col)
+                                player_clicks = [(row, col)]
+                                print(f"Reselected {piece}")
+                            else:
+                                selected_square = None
+                                player_clicks = []
+                        else:
+                            selected_square = None
+                            player_clicks = []
+
+            elif event.type == pg.KEYDOWN:
+                if event.key == pg.K_z and len(gs.moveLog) > 0:
+                    gs.undoMove()
+                    move_made = True
+                    print("Undo! Now whiteToMove:", gs.whiteToMove)
+
+        # Update valid moves after any change
+        if move_made:
+            valid_moves = gs.getValidMoves()
+            move_made = False
+            print(f"Updated: {len(valid_moves)} valid moves, whiteToMove: {gs.whiteToMove}")
+
+        # Draw everything
+        draw_board(screen)
+
+        # Highlight selected square
+        if selected_square:
+            surface = pg.Surface((SQ_SIZE, SQ_SIZE))
+            surface.set_alpha(100)
+            surface.fill(HIGHLIGHT)
+            screen.blit(surface, (selected_square[1] * SQ_SIZE, selected_square[0] * SQ_SIZE))
+
+        draw_pieces(screen, gs.board)
+
+        pg.display.flip()
+        clock.tick(MAX_FPS)
+
+    print("Closing...")
+    pg.quit()
+    sys.exit()
+
+
+if __name__ == "__main__":
+    main()
